@@ -1,0 +1,13 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+pydantic-settings==2.6.1
+python-dotenv==1.0.1
+
+# Added in later phases (kept here so you can see what's coming):
+# sqlalchemy==2.0.36        # Phase 2 - Database
+# psycopg2-binary==2.9.10   # Phase 2 - PostgreSQL driver
+# alembic==1.14.0           # Phase 2 - DB migrations
+# python-jose[cryptography]==3.3.0  # Phase 5 - JWT
+# httpx==0.28.1             # Phase 3 - calling WhatsApp API
+# openai==1.57.0            # Phase 9 - AI Assistant

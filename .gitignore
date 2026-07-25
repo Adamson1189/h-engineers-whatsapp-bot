@@ -1,0 +1,21 @@
+# Environments
+.env
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Database (SQLite fallback, if ever used locally)
+*.db
+*.sqlite3
