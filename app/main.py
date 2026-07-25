@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title=settings.app_name,
-    description="AI-powered WhatsApp Customer Service Platform",
+    description=f"{settings.app_tagline} — AI-powered WhatsApp Customer Service Platform",
     version="0.1.0",
 )
 
@@ -83,14 +83,9 @@ async def health_check():
 
 @app.get("/", tags=["System"])
 async def root():
-    return {"message": f"{settings.app_name} - {settings.app_tagline}"}
+    return {"message": f"{settings.app_name} — {settings.app_tagline}"}
 
 
 # Routers will be added here in later phases, e.g.:
 # from app.routers import whatsapp
 # app.include_router(whatsapp.router, prefix="/webhook", tags=["WhatsApp"])
-from app.core.exceptions import NotFoundException
-
-@app.get("/ping", tags=["System"])
-async def ping():
-   return {"pong": True}
