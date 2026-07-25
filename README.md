@@ -110,3 +110,4 @@ secrets or your virtual environment.
 Database design: Customers, Subscriptions, Plans, Payments, Support Tickets,
 Engineers, Appointments, Activity Logs, Notifications — with SQLAlchemy
 models and our first Alembic migration.
+"# h-engineers-whatsapp-bot" 
