@@ -3,9 +3,9 @@ db/models.py
 
 WHY THIS FILE EXISTS:
 Every database table in this project is defined here as a Python class.
-This is Batch 1 of Phase 2: CoverageArea, Plan, Customer, Subscription.
-(Batch 2 will add Payments, SupportTickets, Engineers, Appointments,
-ActivityLogs, Notifications on top of this foundation.)
+Batch 1: CoverageArea, Plan, Customer, Subscription.
+Batch 2 (added below): Engineer, Payment, SupportTicket, Appointment,
+ActivityLog, Notification.
 
 READING GUIDE for each column type you'll see below:
 - Column(Integer, primary_key=True)  -> auto-incrementing unique ID
@@ -30,6 +30,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
 )
 from sqlalchemy.orm import relationship
 
@@ -175,3 +176,225 @@ class Subscription(Base):
 
     def __repr__(self):
         return f"<Subscription customer={self.customer_id} plan={self.plan_id} status={self.status}>"
+
+
+# ---------------------------------------------------------------------------
+# Engineer
+# ---------------------------------------------------------------------------
+class Engineer(Base):
+    """
+    Field staff who handle installations and support tickets.
+    Referenced by SupportTicket.assigned_engineer and Appointment.engineer.
+    """
+
+    __tablename__ = "engineers"
+
+    id = Column(Integer, primary_key=True)
+    full_name = Column(String(150), nullable=False)
+    phone_number = Column(String(20), unique=True, nullable=False)
+    email = Column(String(150), nullable=True)
+    specialization = Column(String(100), nullable=True)  # e.g. "fiber", "wireless", "CCTV"
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    tickets = relationship("SupportTicket", back_populates="assigned_engineer")
+    appointments = relationship("Appointment", back_populates="engineer")
+
+    def __repr__(self):
+        return f"<Engineer {self.full_name}>"
+
+
+# ---------------------------------------------------------------------------
+# Payment
+# ---------------------------------------------------------------------------
+class PaymentMethod(str, enum.Enum):
+    PAYSTACK = "paystack"
+    BANK_TRANSFER = "bank_transfer"
+    CASH = "cash"
+
+
+class PaymentStatus(str, enum.Enum):
+    PENDING = "pending"
+    SUCCESSFUL = "successful"
+    FAILED = "failed"
+
+
+class Payment(Base):
+    """A single payment made against a Subscription."""
+
+    __tablename__ = "payments"
+
+    id = Column(Integer, primary_key=True)
+
+    subscription_id = Column(Integer, ForeignKey("subscriptions.id"), nullable=False)
+    subscription = relationship("Subscription", backref="payments")
+
+    amount = Column(Numeric(10, 2), nullable=False)
+    payment_method = Column(Enum(PaymentMethod), nullable=False, default=PaymentMethod.PAYSTACK)
+    reference = Column(String(150), unique=True, nullable=True)  # Paystack transaction reference
+    status = Column(Enum(PaymentStatus), nullable=False, default=PaymentStatus.PENDING)
+
+    paid_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<Payment {self.amount} sub={self.subscription_id} status={self.status}>"
+
+
+# ---------------------------------------------------------------------------
+# SupportTicket
+# ---------------------------------------------------------------------------
+class TicketCategory(str, enum.Enum):
+    NO_INTERNET = "no_internet"
+    SLOW_INTERNET = "slow_internet"
+    WIFI_PROBLEM = "wifi_problem"
+    LOS_RED = "los_red"
+    BILLING_ISSUE = "billing_issue"
+    OTHER = "other"
+
+
+class TicketPriority(str, enum.Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    URGENT = "urgent"
+
+
+class TicketStatus(str, enum.Enum):
+    OPEN = "open"
+    IN_PROGRESS = "in_progress"
+    RESOLVED = "resolved"
+    CLOSED = "closed"
+
+
+class SupportTicket(Base):
+    """A complaint/issue raised by a customer, e.g. via the WhatsApp menu."""
+
+    __tablename__ = "support_tickets"
+
+    id = Column(Integer, primary_key=True)
+    ticket_code = Column(String(20), unique=True, nullable=False)  # e.g. "TCK-00001"
+
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
+    customer = relationship("Customer", backref="support_tickets")
+
+    category = Column(Enum(TicketCategory), nullable=False, default=TicketCategory.OTHER)
+    description = Column(Text, nullable=True)
+    priority = Column(Enum(TicketPriority), nullable=False, default=TicketPriority.MEDIUM)
+    status = Column(Enum(TicketStatus), nullable=False, default=TicketStatus.OPEN)
+
+    assigned_engineer_id = Column(Integer, ForeignKey("engineers.id"), nullable=True)
+    assigned_engineer = relationship("Engineer", back_populates="tickets")
+
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+
+    def __repr__(self):
+        return f"<SupportTicket {self.ticket_code} - {self.category} - {self.status}>"
+
+
+# ---------------------------------------------------------------------------
+# Appointment
+# ---------------------------------------------------------------------------
+class AppointmentType(str, enum.Enum):
+    INSTALLATION = "installation"
+    MAINTENANCE = "maintenance"
+    INSPECTION = "inspection"
+
+
+class AppointmentStatus(str, enum.Enum):
+    SCHEDULED = "scheduled"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    RESCHEDULED = "rescheduled"
+
+
+class Appointment(Base):
+    """A scheduled installation, maintenance visit, or inspection."""
+
+    __tablename__ = "appointments"
+
+    id = Column(Integer, primary_key=True)
+
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
+    customer = relationship("Customer", backref="appointments")
+
+    engineer_id = Column(Integer, ForeignKey("engineers.id"), nullable=True)
+    engineer = relationship("Engineer", back_populates="appointments")
+
+    appointment_type = Column(Enum(AppointmentType), nullable=False, default=AppointmentType.INSTALLATION)
+    scheduled_date = Column(DateTime(timezone=True), nullable=False)
+    status = Column(Enum(AppointmentStatus), nullable=False, default=AppointmentStatus.SCHEDULED)
+    notes = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<Appointment customer={self.customer_id} type={self.appointment_type} date={self.scheduled_date}>"
+
+
+# ---------------------------------------------------------------------------
+# ActivityLog
+# ---------------------------------------------------------------------------
+class ActivityLog(Base):
+    """
+    Audit trail — one row per significant action taken in the system
+    (registration, payment received, ticket raised, balance checked, etc.).
+    customer_id is nullable because not every logged action is tied to a
+    specific customer (e.g. an admin action).
+    """
+
+    __tablename__ = "activity_logs"
+
+    id = Column(Integer, primary_key=True)
+
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
+    customer = relationship("Customer", backref="activity_logs")
+
+    action = Column(String(100), nullable=False)  # e.g. "registered", "payment_received"
+    details = Column(Text, nullable=True)  # free-text or JSON-encoded extra context
+
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<ActivityLog {self.action} customer={self.customer_id}>"
+
+
+# ---------------------------------------------------------------------------
+# Notification
+# ---------------------------------------------------------------------------
+class NotificationType(str, enum.Enum):
+    INSTALLATION_REMINDER = "installation_reminder"
+    PAYMENT_REMINDER = "payment_reminder"
+    TICKET_UPDATE = "ticket_update"
+    MAINTENANCE_ALERT = "maintenance_alert"
+    OUTAGE_NOTICE = "outage_notice"
+    INVOICE = "invoice"
+    RECEIPT = "receipt"
+
+
+class NotificationStatus(str, enum.Enum):
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+
+
+class Notification(Base):
+    """An outbound message queued (and later sent) to a customer via WhatsApp."""
+
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True)
+
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
+    customer = relationship("Customer", backref="notifications")
+
+    notification_type = Column(Enum(NotificationType), nullable=False)
+    message = Column(Text, nullable=False)
+    status = Column(Enum(NotificationStatus), nullable=False, default=NotificationStatus.PENDING)
+
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<Notification {self.notification_type} customer={self.customer_id} status={self.status}>"
