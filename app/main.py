@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title=settings.app_name,
-    description="AI-powered WhatsApp Customer Service Platform for H-Engineers Enterprise",
+    description="AI-powered WhatsApp Customer Service Platform",
     version="0.1.0",
 )
 
@@ -73,12 +73,17 @@ async def health_check():
     Simple liveness check. In Phase 14 (Deployment) this is what your
     monitoring / uptime tool will poll to confirm the server is up.
     """
-    return {"status": "ok", "app": settings.app_name, "environment": settings.environment}
+    return {
+        "status": "ok",
+        "app": settings.app_name,
+        "tagline": settings.app_tagline,
+        "environment": settings.environment,
+    }
 
 
 @app.get("/", tags=["System"])
 async def root():
-    return {"message": f"{settings.app_name} is running."}
+    return {"message": f"{settings.app_name} - {settings.app_tagline}"}
 
 
 # Routers will be added here in later phases, e.g.:

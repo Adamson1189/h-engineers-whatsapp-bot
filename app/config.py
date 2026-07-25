@@ -23,7 +23,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # --- App ---
-    app_name: str = "H-Engineers Enterprise WhatsApp Bot"
+    app_name: str = "NETFIBER"
+    app_tagline: str = "powered by H-Engineers Enterprise"
     environment: str = "development"
     debug: bool = True
 
