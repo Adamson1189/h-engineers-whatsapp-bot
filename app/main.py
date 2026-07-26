@@ -86,6 +86,6 @@ async def root():
     return {"message": f"{settings.app_name} — {settings.app_tagline}"}
 
 
-# Routers will be added here in later phases, e.g.:
-# from app.routers import whatsapp
-# app.include_router(whatsapp.router, prefix="/webhook", tags=["WhatsApp"])
+from app.routers import whatsapp
+
+app.include_router(whatsapp.router, prefix="/webhook", tags=["WhatsApp"])
