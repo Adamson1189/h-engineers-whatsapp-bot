@@ -21,9 +21,12 @@ our app. It has exactly two jobs, matching the two HTTP methods below:
 
 import logging
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
+from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.db.session import get_db
+from app.services.message_handler import handle_incoming_message
 from app.services.whatsapp_client import send_text_message
 
 logger = logging.getLogger(__name__)
@@ -54,7 +57,7 @@ async def verify_webhook(
 
 
 @router.post("/whatsapp")
-async def receive_webhook(request: Request):
+async def receive_webhook(request: Request, db: Session = Depends(get_db)):
     """
     Receives every WhatsApp event: incoming messages, status updates
     (sent/delivered/read), etc. Meta's payload is deeply nested, so we
@@ -78,14 +81,7 @@ async def receive_webhook(request: Request):
 
             logger.info(f"Message from {from_number}: {text_body}")
 
-            # Phase 3 proof-of-life: echo a simple greeting back.
-            # Real menu/registration/complaint logic gets built in later phases.
-            reply = (
-                "NETFIBER AI\n"
-                "powered by H-Engineers Enterprise\n\n"
-                f"👋 We received your message: \"{text_body}\"\n\n"
-                "This is a test reply confirming the webhook is working."
-            )
+            reply = handle_incoming_message(db, from_number, text_body)
             await send_text_message(to=from_number, body=reply)
 
     except (KeyError, IndexError) as e:
