@@ -14,7 +14,8 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.services import customer_service, ticket_service
+from app.db.models import Subscription
+from app.services import customer_service, subscription_service, ticket_service
 from app.services.conversation_state import get_session, reset_session
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,9 @@ def handle_incoming_message(db: Session, phone_number: str, text: str) -> str:
 
     if session.step.startswith("track_"):
         return _handle_track_step(db, phone_number, text, session)
+
+    if session.step.startswith("sub_"):
+        return _handle_subscription_step(db, phone_number, text, session)
 
     # Fallback safety net: if we ever end up in an unrecognized step
     # (shouldn't happen, but defensive), reset rather than get the user
@@ -145,8 +149,18 @@ def _handle_main_menu_choice(db: Session, phone_number: str, text: str, session)
         session.step = "track_ticket_id"
         return BRAND_HEADER + "Please enter your Ticket ID (e.g. TCK-00001):"
 
-    if text in {"3", "6", "7", "8"}:
-        # Phases 7-9 will implement each of these. For now, acknowledge
+    if text == "3":
+        existing = customer_service.get_customer_by_phone(db, phone_number)
+        if not existing:
+            return (
+                BRAND_HEADER
+                + "You'll need to register first before subscribing to a plan. "
+                "Reply '1' to register, or 'menu' to go back."
+            )
+        return _show_subscription_menu(db, phone_number, existing, session)
+
+    if text in {"6", "7", "8"}:
+        # Phases 8-9 will implement each of these. For now, acknowledge
         # clearly rather than silently ignoring the choice.
         return (
             BRAND_HEADER
@@ -242,6 +256,110 @@ def _handle_track_step(db: Session, phone_number: str, text: str, session) -> st
             f"Status: {ticket.status.value.replace('_', ' ').title()}\n"
             f"Priority: {ticket.priority.value.title()}\n"
             f"Description: {ticket.description}\n\n"
+            "Reply 'menu' to see other options."
+        )
+
+    # Shouldn't be reachable, but fall back safely.
+    reset_session(phone_number)
+    return BRAND_HEADER + MAIN_MENU_TEXT
+
+
+def _format_plan_list(plans) -> str:
+    lines = []
+    for i, plan in enumerate(plans, start=1):
+        lines.append(f"{i}. {plan.name} -- {plan.speed_mbps}Mbps -- ₦{plan.price:,.0f}/month")
+    return "\n".join(lines)
+
+
+def _show_subscription_menu(db: Session, phone_number: str, customer, session) -> str:
+    """Entry point for menu option '3' -- shows current plan if subscribed,
+    or the plan list to subscribe for the first time."""
+    session.data["customer_id"] = customer.id
+    subscription = subscription_service.get_active_subscription(db, customer.id)
+
+    if not subscription:
+        plans = subscription_service.list_active_plans(db)
+        session.step = "sub_choose_plan"
+        session.data["sub_intent"] = "new"
+        return (
+            BRAND_HEADER
+            + "You don't have an active subscription yet. Choose a plan:\n\n"
+            + _format_plan_list(plans)
+            + "\n\nReply with a number:"
+        )
+
+    session.step = "sub_menu"
+    session.data["subscription_id"] = subscription.id
+    expiry_str = subscription.expiry_date.strftime("%d %b %Y")
+    return (
+        BRAND_HEADER
+        + f"Current Plan: {subscription.plan.name} ({subscription.plan.speed_mbps}Mbps)\n"
+        f"Expires: {expiry_str}\n"
+        f"Balance Owed: ₦{subscription.balance:,.0f}\n\n"
+        "1. Renew this plan\n"
+        "2. Change plan\n"
+        "3. Back to main menu\n\n"
+        "Reply with a number:"
+    )
+
+
+def _handle_subscription_step(db: Session, phone_number: str, text: str, session) -> str:
+    """Handles the Renew / Change Plan / choose-a-plan steps."""
+
+    if session.step == "sub_menu":
+        if text == "1":
+            subscription = db.get(Subscription, session.data["subscription_id"])
+            subscription = subscription_service.renew_subscription(db, subscription)
+            reset_session(phone_number)
+            expiry_str = subscription.expiry_date.strftime("%d %b %Y")
+            return (
+                BRAND_HEADER
+                + f"✅ Renewed! Your {subscription.plan.name} plan now expires {expiry_str}.\n"
+                f"Balance Owed: ₦{subscription.balance:,.0f}\n\n"
+                "Reply 'menu' to see other options."
+            )
+        if text == "2":
+            plans = subscription_service.list_active_plans(db)
+            session.step = "sub_choose_plan"
+            session.data["sub_intent"] = "change"
+            return (
+                BRAND_HEADER
+                + "Choose your new plan:\n\n"
+                + _format_plan_list(plans)
+                + "\n\nReply with a number:"
+            )
+        if text == "3":
+            reset_session(phone_number)
+            return BRAND_HEADER + MAIN_MENU_TEXT
+        return "Please reply with 1, 2, or 3:"
+
+    if session.step == "sub_choose_plan":
+        plans = subscription_service.list_active_plans(db)
+        plan = subscription_service.get_plan_by_number(db, plans, text)
+        if not plan:
+            return "Please reply with a valid plan number from the list above:"
+
+        if session.data.get("sub_intent") == "change":
+            subscription = db.get(Subscription, session.data["subscription_id"])
+            subscription = subscription_service.change_plan(db, subscription, plan)
+            reset_session(phone_number)
+            return (
+                BRAND_HEADER
+                + f"✅ Plan changed to {plan.name} ({plan.speed_mbps}Mbps, "
+                f"₦{plan.price:,.0f}/month).\n\n"
+                "Reply 'menu' to see other options."
+            )
+
+        subscription = subscription_service.subscribe_customer_to_plan(
+            db, customer_id=session.data["customer_id"], plan=plan
+        )
+        reset_session(phone_number)
+        expiry_str = subscription.expiry_date.strftime("%d %b %Y")
+        return (
+            BRAND_HEADER
+            + f"✅ Subscribed to {plan.name} ({plan.speed_mbps}Mbps)!\n"
+            f"Expires: {expiry_str}\n"
+            f"Balance Owed: ₦{subscription.balance:,.0f}\n\n"
             "Reply 'menu' to see other options."
         )
 
