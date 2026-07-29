@@ -22,6 +22,20 @@ def get_customer_by_phone(db: Session, phone_number: str) -> Customer | None:
     return db.query(Customer).filter(Customer.phone_number == phone_number).first()
 
 
+def get_customer_by_email(db: Session, email: str) -> Customer | None:
+    """Looks up an existing customer by email address (case-insensitive)."""
+    return db.query(Customer).filter(func.lower(Customer.email) == email.lower().strip()).first()
+
+
+def get_customer_by_code(db: Session, customer_code: str) -> Customer | None:
+    """Looks up an existing customer by their Customer ID, e.g. 'NF-00001'
+    (case-insensitive, and tolerant of the person forgetting the dash)."""
+    normalized = customer_code.strip().upper().replace(" ", "")
+    if not normalized.startswith("NF-") and normalized.startswith("NF"):
+        normalized = "NF-" + normalized[2:]
+    return db.query(Customer).filter(func.upper(Customer.customer_code) == normalized).first()
+
+
 def generate_customer_code(db: Session) -> str:
     """
     Generates the next customer code in the form NF-00001, NF-00002, etc.

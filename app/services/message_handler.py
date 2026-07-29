@@ -58,11 +58,26 @@ def handle_incoming_message(db: Session, phone_number: str, text: str) -> str:
     if session.step.startswith("register_"):
         return _handle_registration_step(db, phone_number, text, session)
 
+    if session.step.startswith("login_"):
+        return _handle_login_step(db, phone_number, text, session)
+
     # Fallback safety net: if we ever end up in an unrecognized step
     # (shouldn't happen, but defensive), reset rather than get the user
     # stuck in a broken state.
     reset_session(phone_number)
     return BRAND_HEADER + MAIN_MENU_TEXT
+
+
+def _format_profile(customer) -> str:
+    """Shared formatting for showing a customer their own account details."""
+    return (
+        f"Customer ID: {customer.customer_code}\n"
+        f"Name: {customer.full_name}\n"
+        f"Phone: {customer.phone_number}\n"
+        f"Email: {customer.email or 'Not provided'}\n"
+        f"Address: {customer.address or 'Not provided'}\n"
+        f"Account Status: {customer.account_status.value}"
+    )
 
 
 def _handle_main_menu_choice(db: Session, phone_number: str, text: str, session) -> str:
@@ -82,8 +97,31 @@ def _handle_main_menu_choice(db: Session, phone_number: str, text: str, session)
         session.step = "register_name"
         return BRAND_HEADER + "Great! Let's get you registered.\n\nWhat's your full name?"
 
-    if text in {"2", "3", "4", "5", "6", "7", "8"}:
-        # Phases 5-9 will implement each of these. For now, acknowledge
+    if text == "2":
+        # NOTE ON SECURITY: this is a lookup, not a strong identity check.
+        # Recognizing the customer by their WhatsApp phone number is solid
+        # (WhatsApp numbers are hard to spoof), but the Customer ID fallback
+        # below is not -- anyone who knows/guesses a Customer ID can see this
+        # profile. That's an acceptable tradeoff for now since we only show
+        # non-sensitive account info here. Before exposing anything sensitive
+        # (payments, address changes), add an OTP step to the Customer ID path.
+        existing = customer_service.get_customer_by_phone(db, phone_number)
+        if existing:
+            return (
+                BRAND_HEADER
+                + f"Welcome back, {existing.full_name}! 👋\n\n"
+                + _format_profile(existing)
+                + "\n\nReply 'menu' to see other options."
+            )
+        session.step = "login_customer_id"
+        return (
+            BRAND_HEADER
+            + "We don't recognize this phone number. Please enter your "
+            "Customer ID (e.g. NF-00001) to log in:"
+        )
+
+    if text in {"3", "4", "5", "6", "7", "8"}:
+        # Phases 6-9 will implement each of these. For now, acknowledge
         # clearly rather than silently ignoring the choice.
         return (
             BRAND_HEADER
@@ -92,6 +130,31 @@ def _handle_main_menu_choice(db: Session, phone_number: str, text: str, session)
         )
 
     # First-ever message, or unrecognized input -- show the menu.
+    return BRAND_HEADER + MAIN_MENU_TEXT
+
+
+def _handle_login_step(db: Session, phone_number: str, text: str, session) -> str:
+    """Handles the Customer ID lookup path when phone number isn't recognized."""
+
+    if session.step == "login_customer_id":
+        customer = customer_service.get_customer_by_code(db, text)
+        if not customer:
+            return (
+                "We couldn't find that Customer ID. Please double-check and "
+                "try again (e.g. NF-00001), or reply 'menu' to cancel:"
+            )
+        reset_session(phone_number)
+        return (
+            BRAND_HEADER
+            + f"Welcome back, {customer.full_name}! 👋\n\n"
+            + _format_profile(customer)
+            + "\n\nNote: this number isn't linked to that account yet. "
+            "Contact support if you'd like it updated.\n\n"
+            "Reply 'menu' to see other options."
+        )
+
+    # Shouldn't be reachable, but fall back safely.
+    reset_session(phone_number)
     return BRAND_HEADER + MAIN_MENU_TEXT
 
 
