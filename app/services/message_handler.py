@@ -14,7 +14,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.services import customer_service
+from app.services import customer_service, ticket_service
 from app.services.conversation_state import get_session, reset_session
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,12 @@ def handle_incoming_message(db: Session, phone_number: str, text: str) -> str:
 
     if session.step.startswith("login_"):
         return _handle_login_step(db, phone_number, text, session)
+
+    if session.step.startswith("complaint_"):
+        return _handle_complaint_step(db, phone_number, text, session)
+
+    if session.step.startswith("track_"):
+        return _handle_track_step(db, phone_number, text, session)
 
     # Fallback safety net: if we ever end up in an unrecognized step
     # (shouldn't happen, but defensive), reset rather than get the user
@@ -120,8 +126,27 @@ def _handle_main_menu_choice(db: Session, phone_number: str, text: str, session)
             "Customer ID (e.g. NF-00001) to log in:"
         )
 
-    if text in {"3", "4", "5", "6", "7", "8"}:
-        # Phases 6-9 will implement each of these. For now, acknowledge
+    if text == "4":
+        existing = customer_service.get_customer_by_phone(db, phone_number)
+        if not existing:
+            return (
+                BRAND_HEADER
+                + "You'll need to register first before reporting a complaint. "
+                "Reply '1' to register, or 'menu' to go back."
+            )
+        session.step = "complaint_category"
+        session.data["customer_id"] = existing.id
+        category_lines = "\n".join(
+            f"{key}. {label}" for key, (_, label) in ticket_service.CATEGORY_MENU.items()
+        )
+        return BRAND_HEADER + "What's the issue?\n\n" + category_lines + "\n\nReply with a number:"
+
+    if text == "5":
+        session.step = "track_ticket_id"
+        return BRAND_HEADER + "Please enter your Ticket ID (e.g. TCK-00001):"
+
+    if text in {"3", "6", "7", "8"}:
+        # Phases 7-9 will implement each of these. For now, acknowledge
         # clearly rather than silently ignoring the choice.
         return (
             BRAND_HEADER
@@ -150,6 +175,73 @@ def _handle_login_step(db: Session, phone_number: str, text: str, session) -> st
             + _format_profile(customer)
             + "\n\nNote: this number isn't linked to that account yet. "
             "Contact support if you'd like it updated.\n\n"
+            "Reply 'menu' to see other options."
+        )
+
+    # Shouldn't be reachable, but fall back safely.
+    reset_session(phone_number)
+    return BRAND_HEADER + MAIN_MENU_TEXT
+
+
+def _handle_complaint_step(db: Session, phone_number: str, text: str, session) -> str:
+    """Walks through: pick a category -> describe the issue -> ticket created."""
+
+    if session.step == "complaint_category":
+        choice = ticket_service.CATEGORY_MENU.get(text)
+        if not choice:
+            return "Please reply with a valid number (1-6) from the list above:"
+        category, label = choice
+        session.data["category"] = category
+        session.data["category_label"] = label
+        session.step = "complaint_description"
+        return f"Got it -- {label}. Please briefly describe the issue:"
+
+    if session.step == "complaint_description":
+        if len(text) < 3:
+            return "Please provide a bit more detail about the issue:"
+        ticket = ticket_service.create_ticket(
+            db,
+            customer_id=session.data["customer_id"],
+            category=session.data["category"],
+            description=text,
+        )
+        category_label = session.data["category_label"]
+        reset_session(phone_number)
+        logger.info(f"New ticket created: {ticket.ticket_code} ({category_label})")
+        return (
+            BRAND_HEADER
+            + f"✅ Complaint logged successfully!\n\n"
+            f"Ticket ID: {ticket.ticket_code}\n"
+            f"Category: {category_label}\n"
+            f"Priority: {ticket.priority.value.title()}\n\n"
+            "Our support team has been notified. Reply '5' from the main "
+            "menu anytime to check this ticket's status.\n\n"
+            "Reply 'menu' to see other options."
+        )
+
+    # Shouldn't be reachable, but fall back safely.
+    reset_session(phone_number)
+    return BRAND_HEADER + MAIN_MENU_TEXT
+
+
+def _handle_track_step(db: Session, phone_number: str, text: str, session) -> str:
+    """Handles looking up a ticket by its code and showing its current status."""
+
+    if session.step == "track_ticket_id":
+        ticket = ticket_service.get_ticket_by_code(db, text)
+        if not ticket:
+            return (
+                "We couldn't find a ticket with that ID. Please double-check "
+                "and try again (e.g. TCK-00001), or reply 'menu' to cancel:"
+            )
+        reset_session(phone_number)
+        return (
+            BRAND_HEADER
+            + f"Ticket {ticket.ticket_code}\n\n"
+            f"Category: {ticket.category.value.replace('_', ' ').title()}\n"
+            f"Status: {ticket.status.value.replace('_', ' ').title()}\n"
+            f"Priority: {ticket.priority.value.title()}\n"
+            f"Description: {ticket.description}\n\n"
             "Reply 'menu' to see other options."
         )
 
