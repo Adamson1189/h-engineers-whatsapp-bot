@@ -15,7 +15,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.db.models import Subscription
-from app.services import customer_service, subscription_service, ticket_service
+from app.services import customer_service, faq_content, subscription_service, ticket_service
 from app.services.conversation_state import get_session, reset_session
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,9 @@ def handle_incoming_message(db: Session, phone_number: str, text: str) -> str:
 
     if session.step.startswith("sub_"):
         return _handle_subscription_step(db, phone_number, text, session)
+
+    if session.step == "faq_menu":
+        return _handle_faq_step(db, phone_number, text, session)
 
     # Fallback safety net: if we ever end up in an unrecognized step
     # (shouldn't happen, but defensive), reset rather than get the user
@@ -159,9 +162,17 @@ def _handle_main_menu_choice(db: Session, phone_number: str, text: str, session)
             )
         return _show_subscription_menu(db, phone_number, existing, session)
 
-    if text in {"6", "7", "8"}:
-        # Phases 8-9 will implement each of these. For now, acknowledge
-        # clearly rather than silently ignoring the choice.
+    if text == "8":
+            session.step = "faq_menu"
+            return (
+                BRAND_HEADER
+                + "Frequently Asked Questions:\n\n"
+                + faq_content.format_faq_menu()
+                + "\n\nReply with a number, or 'menu' to go back:"
+            )
+
+    if text in {"6", "7"}:
+        # Phase 9 (AI Assistant) and installation scheduling will cover these.
         return (
             BRAND_HEADER
             + "This option is coming soon in a future update. "
@@ -404,6 +415,23 @@ def _handle_registration_step(db: Session, phone_number: str, text: str, session
             f"Name: {customer.full_name}\n\n"
             "Our team will be in touch to schedule your installation. "
             "Reply 'menu' anytime to see other options."
+        )
+
+    # Shouldn't be reachable, but fall back safely.
+    reset_session(phone_number)
+    return BRAND_HEADER + MAIN_MENU_TEXT
+def _handle_faq_step(db: Session, phone_number: str, text: str, session) -> str:
+    """Handles picking a FAQ number; stays on the FAQ menu so the customer
+    can browse multiple questions without re-selecting option 8 each time."""
+
+    if session.step == "faq_menu":
+        choice = faq_content.FAQ_MENU.get(text)
+        if not choice:
+            return "Please reply with a valid number from the list above, or 'menu' to go back:"
+        title, answer = choice
+        return (
+            f"{title}\n\n{answer}\n\n"
+            "Reply with another number, or 'menu' to see other options."
         )
 
     # Shouldn't be reachable, but fall back safely.
