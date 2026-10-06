@@ -8,14 +8,20 @@ webhook router (routers/whatsapp.py) just extracts "who sent what" from
 Meta's payload and hands it to `handle_incoming_message()` here -- all the
 actual conversation logic lives in this one place, making it easy to find
 and extend as we add more menu options in later phases.
+
+NOTE ON ASYNC: this file is `async` because the Pay Now flow needs to call
+Paystack's API (payment_service.initialize_transaction), which is itself
+an async network call. Only the functions that actually await something
+need to be async -- the rest stay plain `def`, called normally without
+`await`, exactly as before.
 """
 
 import logging
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Subscription
-from app.services import customer_service, faq_content, subscription_service, ticket_service
+from app.db.models import Customer, Subscription
+from app.services import customer_service, faq_content, payment_service, subscription_service, ticket_service
 from app.services.conversation_state import get_session, reset_session
 
 logger = logging.getLogger(__name__)
@@ -36,13 +42,12 @@ MAIN_MENU_TEXT = (
 )
 
 
-def handle_incoming_message(db: Session, phone_number: str, text: str) -> str:
+async def handle_incoming_message(db: Session, phone_number: str, text: str) -> str:
     """
     The main entrypoint: given a phone number and the message they sent,
-    return the text we should reply with. This function is deliberately
-    synchronous and side-effect-light (aside from DB writes during
-    registration) so it's easy to test without needing a real WhatsApp
-    connection -- see the test suite for examples.
+    return the text we should reply with. Only the subscription branch
+    needs `await` (it's the only path that can reach Paystack); every
+    other branch behaves exactly as before.
     """
     text = text.strip()
     session = get_session(phone_number)
@@ -69,7 +74,7 @@ def handle_incoming_message(db: Session, phone_number: str, text: str) -> str:
         return _handle_track_step(db, phone_number, text, session)
 
     if session.step.startswith("sub_"):
-        return _handle_subscription_step(db, phone_number, text, session)
+        return await _handle_subscription_step(db, phone_number, text, session)
 
     if session.step == "faq_menu":
         return _handle_faq_step(db, phone_number, text, session)
@@ -163,13 +168,13 @@ def _handle_main_menu_choice(db: Session, phone_number: str, text: str, session)
         return _show_subscription_menu(db, phone_number, existing, session)
 
     if text == "8":
-            session.step = "faq_menu"
-            return (
-                BRAND_HEADER
-                + "Frequently Asked Questions:\n\n"
-                + faq_content.format_faq_menu()
-                + "\n\nReply with a number, or 'menu' to go back:"
-            )
+        session.step = "faq_menu"
+        return (
+            BRAND_HEADER
+            + "Frequently Asked Questions:\n\n"
+            + faq_content.format_faq_menu()
+            + "\n\nReply with a number, or 'menu' to go back:"
+        )
 
     if text in {"6", "7"}:
         # Phase 9 (AI Assistant) and installation scheduling will cover these.
@@ -302,6 +307,7 @@ def _show_subscription_menu(db: Session, phone_number: str, customer, session) -
     session.step = "sub_menu"
     session.data["subscription_id"] = subscription.id
     expiry_str = subscription.expiry_date.strftime("%d %b %Y")
+    pay_line = "4. Pay Now\n" if subscription.balance > 0 else ""
     return (
         BRAND_HEADER
         + f"Current Plan: {subscription.plan.name} ({subscription.plan.speed_mbps}Mbps)\n"
@@ -309,13 +315,19 @@ def _show_subscription_menu(db: Session, phone_number: str, customer, session) -
         f"Balance Owed: ₦{subscription.balance:,.0f}\n\n"
         "1. Renew this plan\n"
         "2. Change plan\n"
-        "3. Back to main menu\n\n"
-        "Reply with a number:"
+        "3. Back to main menu\n"
+        + pay_line
+        + "\nReply with a number:"
     )
 
 
-def _handle_subscription_step(db: Session, phone_number: str, text: str, session) -> str:
-    """Handles the Renew / Change Plan / choose-a-plan steps."""
+async def _handle_subscription_step(db: Session, phone_number: str, text: str, session) -> str:
+    """Handles the Renew / Change Plan / Pay Now / choose-a-plan steps.
+
+    Only this function (and its caller, handle_incoming_message) needed to
+    become `async` -- the Pay Now branch is the only place in the whole
+    conversation flow that awaits a network call (to Paystack).
+    """
 
     if session.step == "sub_menu":
         if text == "1":
@@ -342,7 +354,28 @@ def _handle_subscription_step(db: Session, phone_number: str, text: str, session
         if text == "3":
             reset_session(phone_number)
             return BRAND_HEADER + MAIN_MENU_TEXT
-        return "Please reply with 1, 2, or 3:"
+        if text == "4":
+            subscription = db.get(Subscription, session.data["subscription_id"])
+            if not subscription or subscription.balance <= 0:
+                return "You have no outstanding balance. Reply 'menu' to see other options."
+            customer = db.get(Customer, subscription.customer_id)
+            result = await payment_service.initialize_transaction(
+                subscription, customer_email=customer.email, customer_phone=phone_number
+            )
+            reset_session(phone_number)
+            if result.get("status"):
+                pay_url = result["data"]["authorization_url"]
+                return (
+                    BRAND_HEADER
+                    + f"Tap below to pay your balance of ₦{subscription.balance:,.0f}:\n\n"
+                    f"{pay_url}\n\n"
+                    "You'll get a confirmation here once payment is received."
+                )
+            return (
+                "Something went wrong generating your payment link. "
+                "Please try again later, or reply 'menu'."
+            )
+        return "Please reply with 1, 2, 3, or 4:"
 
     if session.step == "sub_choose_plan":
         plans = subscription_service.list_active_plans(db)
@@ -420,6 +453,8 @@ def _handle_registration_step(db: Session, phone_number: str, text: str, session
     # Shouldn't be reachable, but fall back safely.
     reset_session(phone_number)
     return BRAND_HEADER + MAIN_MENU_TEXT
+
+
 def _handle_faq_step(db: Session, phone_number: str, text: str, session) -> str:
     """Handles picking a FAQ number; stays on the FAQ menu so the customer
     can browse multiple questions without re-selecting option 8 each time."""

@@ -89,3 +89,5 @@ async def root():
 from app.routers import whatsapp
 
 app.include_router(whatsapp.router, prefix="/webhook", tags=["WhatsApp"])
+from app.routers import paystack
+app.include_router(paystack.router, prefix="/webhook", tags=["Paystack"])

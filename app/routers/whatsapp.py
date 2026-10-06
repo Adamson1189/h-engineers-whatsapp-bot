@@ -81,7 +81,7 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
 
             logger.info(f"Message from {from_number}: {text_body}")
 
-            reply = handle_incoming_message(db, from_number, text_body)
+            reply = await handle_incoming_message(db, from_number, text_body)
             await send_text_message(to=from_number, body=reply)
 
     except (KeyError, IndexError) as e:
